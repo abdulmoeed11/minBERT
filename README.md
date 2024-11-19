@@ -1,24 +1,29 @@
 # CS 224N Default Final Project - Multitask BERT
 
-This is the starting code for the default final project for the Stanford CS 224N class. You can find the handout [here](https://web.stanford.edu/class/cs224n/project/default-final-project-bert-handout.pdf)
+This repository contains the code for the default final project for the Stanford CS 224N and some further optimizing extensions. The project focuses on implementing core components of the BERT model, understanding its architecture, and leveraging its embeddings for three key downstream NLP tasks:
 
-In this project, you will implement some important components of the BERT model to better understanding its architecture. 
-You will then use the embeddings produced by your BERT model on three downstream tasks: sentiment classification, paraphrase detection and semantic similarity.
+1. Sentiment Classification
+2. Paraphrase Detection
+3. Semantic Similarity
+4. 
+After completing the BERT implementation, you will have a multitask model capable of performing these tasks simultaneously. The project also includes opportunities to implement extensions and optimizations to improve the baseline model's performance.
 
-After finishing the BERT implementation, you will have a simple model that simultaneously performs the three tasks.
-You will then implement extensions to improve on top of this baseline.
+## Project Overview
 
-## Setup instructions
+The project is structured to help you:
+* Gain a deep understanding of the BERT architecture by implementing key components.
+* Explore multitask learning by training a single model to perform multiple tasks.
+* Experiment with extensions to enhance the baseline model’s performance.
 
-* Follow `setup.sh` to properly setup a conda environment and install dependencies.
-* There is a detailed description of the code structure in [STRUCTURE.md](./STRUCTURE.md), including a description of which parts you will need to implement.
-* You are only allowed to use libraries that are installed by `setup.sh`, external libraries that give you other pre-trained models or embeddings are not allowed (e.g., `transformers`).
+## 📈 Extensions
+After implementing the baseline model, explore these extensions to improve its performance:
 
-## Handout
-
-Please refer to the handout for a through description of the project and its parts.
+* Optimizer and Learning Rate Scheduling: Experiment with optimizers like Adam, AdamW, or SGD, and use techniques like warmup and decay.
+* Regularization Techniques: Add dropout, weight decay, or layer normalization to prevent overfitting.
+* Task-Specific Modifications: Create custom task heads for better task-specific performance.
 
 ### Acknowledgement
+This project is for educational purposes and is restricted to use within the Stanford CS 224N course. For external use, please contact the course administrators.
 
 The BERT implementation part of the project was adapted from the "minbert" assignment developed at Carnegie Mellon University's [CS11-711 Advanced NLP](http://phontron.com/class/anlp2021/index.html),
 created by Shuyan Zhou, Zhengbao Jiang, Ritam Dutt, Brendon Boldt, Aditya Veerubhotla, and Graham Neubig.
