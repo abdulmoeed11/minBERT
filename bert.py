@@ -47,7 +47,12 @@ class BertSelfAttention(nn.Module):
     # next, we need to concat multi-heads and recover the original shape [bs, seq_len, num_attention_heads * attention_head_size = hidden_size]
 
     ### TODO
-    raise NotImplementedError
+    bs, h, n, ahs = key.size()
+    S = torch.matmul(query, key.transpose(-1, -2)) / ahs**0.5
+    S += attention_mask
+    weight = F.softmax(S, dim=-1)
+    V_ = torch.matmul(weight, value).transpose(1, 2).contiguous()
+    return V_.view(bs, n, -1)
 
 
   def forward(self, hidden_states, attention_mask):
@@ -94,7 +99,11 @@ class BertLayer(nn.Module):
     """
     # Hint: Remember that BERT applies to the output of each sub-layer, before it is added to the sub-layer input and normalized 
     ### TODO
-    raise NotImplementedError
+    output = dense_layer(output)
+    output = dropout(output)
+    out = input + output
+    out = ln_layer(out)
+    return out
 
 
   def forward(self, hidden_states, attention_mask):
@@ -108,7 +117,12 @@ class BertLayer(nn.Module):
     4. a add-norm that takes the input and output of the feed forward layer
     """
     ### TODO
-    raise NotImplementedError
+    output = self.self_attention(hidden_states, attention_mask)
+    output = self.add_norm(hidden_states, output, self.attention_dense, self.attention_dropout, self.attention_layer_norm)
+    out = self.interm_af(self.interm_dense(output))
+    out = self.add_norm(output, out, self.out_dense,
+                            self.out_dropout, self.out_layer_norm)
+    return out
 
 
 
@@ -148,17 +162,15 @@ class BertModel(BertPreTrainedModel):
     seq_length = input_shape[1]
 
     # Get word embedding from self.word_embedding into input_embeds.
-    inputs_embeds = None
+    inputs_embeds = self.word_embedding(input_ids)
     ### TODO
-    raise NotImplementedError
 
 
     # Get position index and position embedding from self.pos_embedding into pos_embeds.
     pos_ids = self.position_ids[:, :seq_length]
 
-    pos_embeds = None
+    pos_embeds = self.pos_embedding(pos_ids)
     ### TODO
-    raise NotImplementedError
 
 
     # Get token type ids, since we are not consider token type, just a placeholder.
@@ -167,7 +179,10 @@ class BertModel(BertPreTrainedModel):
 
     # Add three embeddings together; then apply embed_layer_norm and dropout and return.
     ### TODO
-    raise NotImplementedError
+    embeds = pos_embeds + inputs_embeds + tk_type_embeds
+    output = self.embed_layer_norm(embeds)
+    output = self.embed_dropout(output)
+    return output
 
 
   def encode(self, hidden_states, attention_mask):
@@ -204,3 +219,151 @@ class BertModel(BertPreTrainedModel):
     first_tk = self.pooler_af(first_tk)
 
     return {'last_hidden_state': sequence_output, 'pooler_output': first_tk}
+  
+
+
+class BertModelWithPAL(BertModel):
+  def __init__(self, config):
+    super().__init__(config, bert_layer=BertLayerWithPAL)
+
+  def from_BertModel(bert_model, bert_config, train_pal=True):
+    bert_model.__class__ = BertModelWithPAL
+    bert_model.project_ups = nn.ModuleList([nn.Linear(bert_config.low_rank_size, bert_config.hidden_size) for task in range(bert_config.num_tasks)])
+    bert_model.project_downs = nn.ModuleList([nn.Linear(bert_config.hidden_size, bert_config.low_rank_size) for task in range(bert_config.num_tasks)])
+    # Intialize the low rank matrices to zero.
+    for project_up in bert_model.project_ups:
+      nn.init.zeros_(project_up.weight)
+    for project_down in bert_model.project_downs:
+      nn.init.zeros_(project_down.weight)
+    bert_model.bert_layers = nn.ModuleList([BertLayerWithPAL.from_BertLayer(bert_layer, bert_config, project_ups=bert_model.project_ups, project_downs=bert_model.project_downs, train_pal=train_pal) for bert_layer in bert_model.bert_layers])
+    for param in bert_model.project_downs.parameters():
+      param.requires_grad = train_pal
+    for param in bert_model.project_ups.parameters():
+      param.requires_grad = train_pal
+
+
+  def encode(self, hidden_states, attention_mask, task_id):
+    """
+    hidden_states: the output from the embedding layer [batch_size, seq_len, hidden_size]
+    attention_mask: [batch_size, seq_len]
+    """
+    # get the extended attention mask for self attention
+    # returns extended_attention_mask of [batch_size, 1, 1, seq_len]
+    # non-padding tokens with 0 and padding tokens with a large negative number 
+    extended_attention_mask: torch.Tensor = get_extended_attention_mask(attention_mask, self.dtype)
+
+    # pass the hidden states through the encoder layers
+    for i, layer_module in enumerate(self.bert_layers):
+      # feed the encoding from the last bert_layer to the next
+      #print("Encode layer: ", i, " task_id: ", task_id, " hidden_states: ", hidden_states.shape, " attention_mask: ", extended_attention_mask.shape)
+      hidden_states = layer_module(hidden_states, extended_attention_mask, task_id=task_id)
+      #print("hidden_states after layer: ", hidden_states.shape)
+
+    return hidden_states
+
+  def forward(self, input_ids, attention_mask, task_id):
+    """
+    input_ids: [batch_size, seq_len], seq_len is the max length of the batch
+    attention_mask: same size as input_ids, 1 represents non-padding tokens, 0 represents padding tokens
+    """
+    # get the embedding for each input token
+    embedding_output = self.embed(input_ids=input_ids)
+
+    # feed to a transformer (a stack of BertLayers)
+    sequence_output = self.encode(embedding_output, attention_mask=attention_mask, task_id=task_id)
+
+    # get cls token hidden state
+    first_tk = sequence_output[:, 0]
+    first_tk = self.pooler_dense(first_tk)
+    first_tk = self.pooler_af(first_tk)
+
+    return {'last_hidden_state': sequence_output, 'pooler_output': first_tk}
+
+
+class TaskSpecificAttention(nn.Module):
+  def __init__(self, config, project_up = None, project_down = None, perform_initial_init=False):
+    super().__init__()
+    #print("Creating project down layer with hidden size", config.hidden_size, "and low rank size", config.low_rank_size)
+    self.project_down = nn.Linear(config.hidden_size, config.low_rank_size) if project_down is None else project_down
+    self.project_up = nn.Linear(config.low_rank_size, config.hidden_size) if project_up is None else project_up
+    config_self_attention = copy.deepcopy(config)
+    config_self_attention.hidden_size = config.low_rank_size
+    # config_self_attention.num_attention_heads = 6
+    self.attention = BertSelfAttention(config_self_attention, init_to_identity=perform_initial_init)
+
+    # Intialize the weight of project_down, project_up such that the self-attention is the zero function
+    if perform_initial_init:
+      if project_down is None:
+        self.project_down.weight.data.zero_()
+        self.project_down.bias.data.zero_()
+      if project_up is None:
+        self.project_up.weight.data.zero_()
+        self.project_up.bias.data.zero_()
+
+  def forward(self, hidden_states, attention_mask):
+    """
+    hidden_states: [bs, seq_len, hidden_state]
+    attention_mask: [bs, 1, 1, seq_len]
+    output: [bs, seq_len, hidden_state]
+    """
+    # Step 1: project to a lower rank space
+    #print("Project down shape", self.project_down
+    #print("hidden_states", hidden_states.shape)
+    low_rank_hidden_states = self.project_down(hidden_states)
+    #print("low_rank_hidden_states", low_rank_hidden_states.shape)
+    low_rank_attention_mask = attention_mask
+
+    # Step 2: apply the original BERT self-attention layer
+    attn_value = self.attention(low_rank_hidden_states, low_rank_attention_mask)
+    #print("attn_value", attn_value.shape)
+
+    # Step 3: project back to the original hidden size
+    attn_value = self.project_up(attn_value)
+
+    return attn_value
+
+
+
+class BertLayerWithPAL(BertLayer):
+  def __init__(self, config, project_ups = None, project_downs = None):
+    super().__init__(config)
+    
+    # Task-specific attention
+    self.project_ups = nn.ModuleList([nn.Linear(config.low_rank_size, config.hidden_size) for task in range(config.num_tasks)]) if project_ups is None else project_ups
+    self.project_downs = nn.ModuleList([nn.Linear(config.hidden_size, config.low_rank_size) for task in range(config.num_tasks)]) if project_downs is None else project_downs
+    self.task_attention = nn.ModuleList([TaskSpecificAttention(config, project_up=self.project_ups[task], project_down=self.project_downs[task]) for task in range(config.num_tasks)])
+
+
+  def forward(self, hidden_states, attention_mask, task_id):
+    """
+    hidden_states: [bs, seq_len, hidden_state]
+    attention_mask: [bs, 1, 1, seq_len]
+    task_id: int
+    output: [bs, seq_len, hidden_state]
+    """
+    self_attention_output = self.self_attention(hidden_states, attention_mask)
+    task_attention_output = self.task_attention[task_id](hidden_states, attention_mask)
+    attention_output = self_attention_output + task_attention_output
+    self_attention_output = self.add_norm(hidden_states, attention_output, self.attention_dense, self.attention_dropout, self.attention_layer_norm)
+    interm_output = self.interm_af(self.interm_dense(self_attention_output))
+    output = self.add_norm(self_attention_output, interm_output, self.out_dense, self.out_dropout, self.out_layer_norm)
+    #print("output", output.shape)
+    return output
+
+  def from_BertLayer(bert_layer, config, project_ups = None, project_downs = None, train_pal = True):
+    """
+    this function is used to convert a BertLayer to BertLayerWithPAL
+    bert_layer: BertLayer
+    config: BertConfig
+    output: BertLayerWithPAL
+    """
+    # Hint: you can use the following code to convert a BertLayer to BertLayerWithPAL
+    # pal_layer = BertLayerWithPAL.from_BertLayer(bert_layer, config)
+    bert_layer.__class__ = BertLayerWithPAL
+    #print(config.low_rank_size)
+    bert_layer.task_attention = nn.ModuleList([TaskSpecificAttention(config, project_up=project_ups[task], project_down=project_downs[task], perform_initial_init=True) for task in range(config.num_tasks)])
+    
+    for param in bert_layer.task_attention.parameters():
+      param.requires_grad = train_pal
+
+    return bert_layer

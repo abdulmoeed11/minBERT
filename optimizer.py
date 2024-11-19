@@ -59,7 +59,20 @@ class AdamW(Optimizer):
                 #    (incorporating the learning rate again).
 
                 ### TODO
-                raise NotImplementedError
-
-
+                if 't' not in state.keys():
+                    state['t'] = 0
+                    state["m"] = torch.zeros(grad.size()).to(grad.device)
+                    state["v"] = torch.zeros(grad.size()).to(grad.device)
+                beta1, beta2 = group['betas']
+                eps = group['eps']
+                weight_decay = group['weight_decay'] 
+                state['t'] = state['t'] + 1
+                gradt = grad
+                state['m'] = beta1*state['m'] + (1-beta1) * gradt
+                state['v'] = beta2*state['v'] + (1-beta2) * (torch.mul(gradt,gradt))
+                alphat= (alpha * math.sqrt(1-beta2**state["t"]))/(1-beta1**state["t"])
+                p.data = p.data - alphat * (state['m'])/(torch.sqrt(state['v']) + eps)
+                p.data = p.data - alpha * weight_decay * p.data
+                
         return loss
+

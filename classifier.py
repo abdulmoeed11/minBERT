@@ -4,6 +4,7 @@ import csv
 
 import torch
 import torch.nn.functional as F
+import torch.nn as nn
 from torch.utils.data import Dataset, DataLoader
 from sklearn.metrics import classification_report, f1_score, recall_score, accuracy_score
 
@@ -45,7 +46,7 @@ class BertSentimentClassifier(torch.nn.Module):
                 param.requires_grad = True
 
         ### TODO
-        raise NotImplementedError
+        self.classifier = nn.Sequential(nn.Linear(config.hidden_size, 64), nn.ReLU(), nn.Linear(64, self.num_labels))
 
 
     def forward(self, input_ids, attention_mask):
@@ -54,7 +55,10 @@ class BertSentimentClassifier(torch.nn.Module):
         # HINT: you should consider what is the appropriate output to return given that
         # the training loop currently uses F.cross_entropy as the loss function.
         ### TODO
-        raise NotImplementedError
+        output_dict = self.bert(input_ids, attention_mask)
+        cls = output_dict['pooler_output']
+        logits = self.classifier(cls)
+        return logits
 
 
 
@@ -136,13 +140,13 @@ def load_data(filename, flag='train'):
     num_labels = {}
     data = []
     if flag == 'test':
-        with open(filename, 'r') as fp:
+        with open(filename, 'r', encoding='utf-8') as fp:
             for record in csv.DictReader(fp,delimiter = '\t'):
                 sent = record['sentence'].lower().strip()
                 sent_id = record['id'].lower().strip()
                 data.append((sent,sent_id))
     else:
-        with open(filename, 'r') as fp:
+        with open(filename, 'r', encoding='utf-8') as fp:
             for record in csv.DictReader(fp,delimiter = '\t'):
                 sent = record['sentence'].lower().strip()
                 sent_id = record['id'].lower().strip()
@@ -232,6 +236,7 @@ def train(args):
     # Load data
     # Create the data and its corresponding datasets and dataloader
     train_data, num_labels = load_data(args.train, 'train')
+    print(num_labels)
     dev_data = load_data(args.dev, 'valid')
 
     train_dataset = SentimentDataset(train_data, args)
@@ -350,26 +355,26 @@ if __name__ == "__main__":
     seed_everything(args.seed)
     #args.filepath = f'{args.option}-{args.epochs}-{args.lr}.pt'
 
-    print('Training Sentiment Classifier on SST...')
-    config = SimpleNamespace(
-        filepath='sst-classifier.pt',
-        lr=args.lr,
-        use_gpu=args.use_gpu,
-        epochs=args.epochs,
-        batch_size=args.batch_size,
-        hidden_dropout_prob=args.hidden_dropout_prob,
-        train='data/ids-sst-train.csv',
-        dev='data/ids-sst-dev.csv',
-        test='data/ids-sst-test-student.csv',
-        option=args.option,
-        dev_out = 'predictions/'+args.option+'-sst-dev-out.csv',
-        test_out = 'predictions/'+args.option+'-sst-test-out.csv'
-    )
+    # print('Training Sentiment Classifier on SST...')
+    # config = SimpleNamespace(
+    #     filepath='sst-classifier.pt',
+    #     lr=args.lr,
+    #     use_gpu=args.use_gpu,
+    #     epochs=args.epochs,
+    #     batch_size=args.batch_size,
+    #     hidden_dropout_prob=args.hidden_dropout_prob,
+    #     train='data/ids-sst-train.csv',
+    #     dev='data/ids-sst-dev.csv',
+    #     test='data/ids-sst-test-student.csv',
+    #     option=args.option,
+    #     dev_out = 'predictions/'+args.option+'-sst-dev-out.csv',
+    #     test_out = 'predictions/'+args.option+'-sst-test-out.csv'
+    # )
 
-    train(config)
+    # train(config)
 
-    print('Evaluating on SST...')
-    test(config)
+    # print('Evaluating on SST...')
+    # test(config)
 
     print('Training Sentiment Classifier on cfimdb...')
     config = SimpleNamespace(
@@ -389,5 +394,5 @@ if __name__ == "__main__":
 
     train(config)
 
-    print('Evaluating on cfimdb...')
-    test(config)
+    # print('Evaluating on cfimdb...')
+    # test(config)
